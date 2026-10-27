@@ -1,70 +1,54 @@
-# Retrieval-Augmented Generation for Document Q&A
+# RAG Document Brain
 
-A RAG pipeline that lets you upload documents (text, PDF, CSV), chunks and embeds them with Sentence-Transformers, stores vectors in ChromaDB, and answers questions by retrieving relevant passages and grounding responses with source citations.
+A semantic passage-search API and Streamlit interface. It splits text into overlapping chunks, embeds them with `all-MiniLM-L6-v2` and retrieves similar passages from Chroma. Despite the project name, this implementation does not load an answer-generating LLM: the response's `answer` field formats retrieved previews and source filenames.
 
-## how it works
+## Retrieval flow
 
+```text
+text → 500-word chunks, 50-word overlap → MiniLM embeddings → Chroma
+query → MiniLM embedding → cosine search → passage previews + sources
 ```
-document → chunking (500w, 50w overlap) → embedding (384d) → ChromaDB
-                                                                  ↓
-question → embed query → cosine similarity search → top-k chunks → answer
-```
 
-the pipeline breaks documents into overlapping word-level chunks so nothing gets lost at boundaries. each chunk gets a 384-dimensional embedding from all-MiniLM-L6-v2, then goes into ChromaDB for fast similarity search. when you ask a question, it finds the most relevant chunks and returns them with similarity scores and source attribution.
+[core/pipeline.py](core/pipeline.py) coordinates ingestion and retrieval. [core/chunker.py](core/chunker.py) decodes uploaded bytes as UTF-8, falling back to Latin-1. It does not parse PDFs, even though the upload widget accepts them; CSV input is treated as raw text, not a table. Use plain-text files or `/ingest/text`.
 
-**stack:**
-- all-MiniLM-L6-v2 for embeddings (22M params, 384d vectors)
-- ChromaDB with HNSW indexing for sub-millisecond retrieval
-- FastAPI + Uvicorn for the REST API
+## Run locally
 
-## setup
+Use Python 3.10+. From the repository root:
 
 ```bash
-pip install -r requirements.txt
-python main.py
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 8002
 ```
 
-runs at `localhost:8002`. swagger docs at `/docs`.
+For Windows PowerShell, activate with `.\.venv\Scripts\Activate.ps1` instead. Open `http://127.0.0.1:8002/docs`. Importing the application initializes the embedding model, which downloads if not cached. Dependencies are unpinned.
 
-## api
+For the separate upload/search interface, run `streamlit run app.py`. It creates its own pipeline, not an API client, so its store is not the API's store.
 
-| endpoint | method | what it does |
-|----------|--------|-------------|
-| `/health` | GET | pipeline status + store stats |
-| `/ingest` | POST | upload and ingest a file |
-| `/ingest/text` | POST | ingest raw text with a source name |
-| `/query` | POST | semantic search over your documents |
-| `/documents` | GET | list all ingested sources |
-| `/documents` | DELETE | clear the vector store |
-| `/similar` | POST | find similar passages to input text |
+## API
 
-## architecture
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/health` | Pipeline and store status |
+| POST | `/ingest` | Decode and ingest uploaded bytes |
+| POST | `/ingest/text` | Ingest text with a source name |
+| POST | `/query` | Retrieve passage previews and sources |
+| GET | `/documents` | List ingested sources |
+| DELETE | `/documents` | Clear the store |
+| POST | `/similar` | Retrieve passages similar to input text |
 
-```
-core/
-├── config.py       → chunk sizes, model names, all settings
-├── chunker.py      → word-level text splitting with overlap
-├── embedder.py     → sentence-transformers wrapper
-├── vectorstore.py  → ChromaDB operations + cosine search
-└── pipeline.py     → orchestrates chunk → embed → store → query
+## Current limits
 
-api/
-├── schemas.py      → pydantic request/response models
-└── routes.py       → endpoint handlers
+- [core/vectorstore.py](core/vectorstore.py) uses an ephemeral Chroma client, not persistent storage.
+- Similarity scores are not probabilities that a passage answers the question. Chunk overlap does not guarantee that all context is retained.
+- The configured 10 MB file-size setting is not enforced by the upload route. A selected Streamlit file can be ingested again on reruns, producing duplicate chunks.
+- The API has no authentication, including on store deletion, and permits all CORS origins. The [loopback launch](https://uvicorn.dev/settings/) above is for local use; `python main.py` instead binds all interfaces with reload enabled.
+- PDF extraction, generated answers, retrieval quality and claimed sub-millisecond performance are not established by this implementation. No tests or benchmark results are committed.
 
-main.py             → FastAPI entry point
-app.py              → streamlit frontend
-```
+Setup, model execution and browser flows were not rerun for this documentation update.
 
-## streamlit demo
+## Related implementations
 
-```bash
-streamlit run app.py
-```
+[ML-Portfolio-Projects](https://github.com/Zinga18018/ML-Portfolio-Projects) contains an [retrieval API variant](https://github.com/Zinga18018/ML-Portfolio-Projects/tree/master/project2-rag-document-brain) and a different [HF Space variant](https://github.com/Zinga18018/ML-Portfolio-Projects/tree/master/hf-spaces/rag-document-brain). The HF variant adds TinyLlama answer generation and different document handling. Those features should not be assumed to exist in this repository.
 
-upload documents, ask questions, and see retrieved chunks with similarity scores.
-
-## requirements
-
-- python 3.10+
-- GPU optional (embeddings are fast on CPU too)
